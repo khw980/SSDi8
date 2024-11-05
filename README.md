@@ -27,13 +27,14 @@
 - CMAKE version 3.22.1 or above
 
 ### Clone Quamba
-- To clone the repository with all submodules:
+- Clone the repository with all submodules:
 ```
 git clone --recurse-submodules git@github.com:enyac-group/Quamba.git
 ```
 
 - Run in docker (optional)
-To build the docker image with customized kernels, run the following command:
+
+To build the docker image with customized kernels, run the following commands:
 ```
 cd docker
 ./build_docker.sh
