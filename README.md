@@ -33,23 +33,19 @@ git clone --recurse-submodules git@github.com:enyac-group/Quamba.git
 ```
 
 - Run in docker (optional)
-As our implementation entails customized CUDA kernels and depends on specific CUDA version, user may optionally run our code in docker. To build the docker image, run the following command:
+To build the docker image with customized kernels, run the following command:
 ```
 cd docker
 ./build_docker.sh
+./run.sh # launch the container
 ```
 
-After building the docker image, user can run the docker container with the following command:
-```
-./run.sh
-```
-
-Or you could pull the pre-built docker image by
+Or Pull the pre-built docker image by
 ```
 docker image pull hychiang/quamba-cuda-12.1:latest
 ```
 
-- Create conda environment
+- Create Quamba conda environment
 ```
 cd Quamba
 conda create -n quamba python=3.10
@@ -92,12 +88,12 @@ pip install .
 
 ## Generate
 
-To generate the sentence from a FP16 mamba model with a input prompt:
+To generate the sentence from Mamba (FP16) given an input prompt:
 ```
 python generate.py state-spaces/mamba-130m --prompt "My cat wrote all this CUDA code for a new language model and" --topp 0.9 --temperature 0.7 --repetition_penalty 1.2
 ```
 
-To generate the sentence from a Int8 mamba model with a input prompt:
+To generate the sentence from Qamba (Int8) given an input prompt:
 ```
 python generate.py state-spaces/mamba-130m --prompt "My cat wrote all this CUDA code for a new language model and" --topp 0.9 --temperature 0.7 --repetition_penalty 1.2 --quantize --act_scales_cache mamba-130m_scales.pt
 ```
@@ -105,12 +101,12 @@ python generate.py state-spaces/mamba-130m --prompt "My cat wrote all this CUDA 
 
 ## Chat
 
-To chat with the fp16 model, use the command:
+To chat with Mamba (FP16), use the command:
 ```
 python chat.py  --cache_graph
 ```
 
-To chat with the int8 model, use the command:
+To chat with Quamba (Int8), use the command:
 ```
 python chat.py  --cache_graph --act_scales_cache mamba-2.8b_scales_chat.pt  --quantize
 ```
@@ -138,7 +134,7 @@ python profile_mamba.py state-spaces/mamba-2.8b  --act_scales_cache mamba-2.8b_s
 ```
 
 ## Fake Quantization Evaluation
-We support fake quantization simulation for mamba models. To evaluate the performance of the quantized model using fake quantization on lambada_openai (--eval_zero_shot) , you can run the following command:
+To evaluate the simulated quantization:
 ```
 python main.py state-spaces/mamba-130m fake \
 --do_hadamard \
@@ -148,11 +144,9 @@ python main.py state-spaces/mamba-130m fake \
 --eval_zero_shot \
 --log_dir logs
 ```
-User may optionally add `--do_hadamard` and `--do_percentile_u` to enable hadamard transform and percentile u quantization for the ssm's output and input, respectively.
 
 ## Real Quantization Evaluation
-Real quantization only supports `static` quantization, percentile u tensor, and hadamard transform at ssm out with `batch_size = 1`. To evaluate the performance of the quantized model using real quantization on lambada_openai (--eval_zero_shot), you can run the following command:
-+ Static quantization, percentile u_quant and hadamard transform ssm_out:
+To evaluate the end-to-end quantization:
 ```
 python main.py state-spaces/mamba-130m real \
 --act_scales_cache mamba-130m_scales.pt \
