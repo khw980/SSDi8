@@ -11,7 +11,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation import TextStreamer
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 
-from quamba.real_quant.modelutils_mamba import quantize_blocks, run_calibration
+from utils import get_quantize_options
+from quamba.quamba_mixer_seq import QuambaLMHeadModel
+from quamba.modelutils_mamba import quantize_model_mamba
 
 def preprocess(conversation, tokenizer, conversation_template, max_tokens, device):
     """
@@ -31,12 +33,20 @@ def main(args):
     dtype = torch.float16
 
     logging.info(f"Loading {args.model}")
-    is_mamba = args.model.split("/")[-1].startswith("mamba-")
-    if not is_mamba:
-        raise ValueError("Not support other models now")
+    model_name = args.model.lower().split('/')[-1]
+    model_type = model_name.split('-')[0] # Assume that the models name is like "model_type-<model_size, model version>"
+    hf_repo = args.model.split("/")[0]
+    is_mamba = args.model.split("/")[-1].startswith("mamba")  # mamba or mamba2
+    is_quamba = args.model.split("/")[-1].startswith("quamba") # quamba or quamba2
+    if not is_mamba and not is_quamba:
+        raise ValueError(f"Unsupported model {args.model}, only supports mamba now "
+                         "Try `havenhq/mamba-chat`?")
+    if not hf_repo == "havenhq" and "chat" not in args.model:
+        raise ValueError("Only `havenhq/mamba-chat` will have the correct chatting results, "
+                        "please see https://github.com/redotvideo/mamba-chat for more details.")
 
     # build tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained("havenhq/mamba-chat")
     tokenizer.eos_token = "<|endoftext|>"
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.chat_template = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta").chat_template
@@ -44,38 +54,49 @@ def main(args):
     streamer = TextStreamer(tokenizer, skip_prompt=True)
     # load model and quantize it
     start = time.time()
-    model = MambaLMHeadModel.from_pretrained(args.model, device="cuda", dtype=dtype)
-    elaspe_time = time.time() - start
-    logging.info(f"Loading model takes: {elaspe_time:.2f} s")
-    logging.info(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
-
-    if args.quantize:
-        if os.path.isfile(args.act_scales_cache):
-            logging.info(f"Found activation scales cache {args.act_scales_cache}")
-            act_scales = torch.load(args.act_scales_cache)
-        else:
+    # cg_dtype = torch.float16
+    if is_mamba:
+        model = MambaLMHeadModel.from_pretrained(args.model, device="cuda", dtype=dtype)
+        if args.quantize:
             calibration_dataset = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_gen")
             calibration_dataset.shuffle(seed=42)
             preprocess_fn = partial(preprocess, tokenizer=tokenizer,
                                 conversation_template=tokenizer.chat_template,
                                 max_tokens=1024, device=device)
-            act_scales = run_calibration(model, "mamba", tokenizer, seq_len=1024,
-                            calibration_dataset=calibration_dataset,
-                            preprocess_fn=preprocess_fn)
-            
-            if args.act_scales_cache:
-                logging.info(f"Store activation scales at {args.act_scales_cache}")
-                torch.save(act_scales, args.act_scales_cache)
-        # quantization
-        logging.info("Start quantizing model...")
-        model = quantize_blocks(model, "mamba", act_scales, device)
-        model.eval()
-    
+            model = quantize_model_mamba(model, model_type, tokenizer, device, args,
+                                calibration_dataset=calibration_dataset,
+                                calib_preprocess_fn=preprocess_fn)
+        # if "a8" in args.model:
+        #     cg_dtype = torch.int8
+    elif is_quamba:
+        # ut-enyac/quamba-chat-wxax --pretrained_dir pretrained_models
+        assert args.pretrained_dir, "Please specify the --pretrained_dir for quamba models"
+        quantized_model_path = os.path.join(args.pretrained_dir, args.model)
+        assert os.path.exists(quantized_model_path), f"Quantized model {quantized_model_path} not found"
+        model = QuambaLMHeadModel.from_pretrained(quantized_model_path, device="cuda")
+        # if "a8" in args.model:
+        #     cg_dtype = torch.int8
+    else:
+        model = AutoModelForCausalLM.from_pretrained(args.model, device_map={"": device}, torch_dtype=dtype)
+        if args.quantize:
+            raise ValueError(f"Unsupport quantizing {args.model}, only supports mamba now")
+    elaspe_time = time.time() - start
+    logging.info(f"Loading model takes: {elaspe_time:.2f} s")
+    # logging.info(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+    param_size = 0
+    for param in model.parameters():
+        param_size += param.nelement() * param.element_size()
+    buffer_size = 0
+    for buffer in model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+    model_mb = (param_size + buffer_size) / 1024**2
+    logging.info('model size: {:.3f} MB'.format(model_mb))
+
     # generate function
     generate_fn = partial(model.generate,
         max_length=256,
         cg=args.cache_graph,
-        cg_dtype=torch.int8 if args.quantize else torch.float16,
+        # cg_dtype=cg_dtype,
         temperature=args.temperature,
         top_k=args.topk,
         top_p=args.topp,
@@ -149,17 +170,8 @@ if __name__ =='__main__':
     parser.add_argument(
         '--use_testing_prompts', action='store_true', default=False,
     )
-    # quantization parameters
-    parser.add_argument(
-        '--quantize', action='store_true', default=False,
-    )
-    parser.add_argument(
-        '--act_scales_cache', type=str, 
-        help='The pre-calibrated activaction scaling factors for static quant.'
-            'Performing daynamic quant if not provided. (default: None)'
-    )
+    get_quantize_options(parser)
     args = parser.parse_args()
-
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s [%(filename)s:%(lineno)3d] %(message)s",
