@@ -17,6 +17,7 @@ else
     echo "Creating and running a new container ${CONTAINER_NAME}..."
     docker run -it --gpus all --name ${CONTAINER_NAME} \
     -v "${PWD}:/home/user/Quamba:rw" \
+    -w /home/user/Quamba \
     --shm-size 64G \
     "${IMAGE_NAME}" $@
 fi
