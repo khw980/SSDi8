@@ -31,8 +31,6 @@ cd SSDi8
 conda create -n quamba python=3.10
 conda activate quamba
 pip install -r requirements.txt
-pip uninstall -y triton
-pip install triton==3.4.0
 ```
 
 ### Build 3rd-party Libraries
@@ -69,7 +67,11 @@ pip install -e 3rdparty/Megatron-LM
 # Not sure why Megatron-LM will force to install pytorch 2.6.0+cu124,
 # run `pip install -r requirements.txt` again if necessary
 ```
-
+- Triton update
+```bash
+pip uninstall -y triton
+pip install triton==3.4.0
+```
 ### Build Quamba
 ```bash
 pip install .
