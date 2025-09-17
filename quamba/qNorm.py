@@ -29,6 +29,7 @@ class QRMSNorm(torch.nn.Module):
         qnorm = cls(originalLayer.weight.shape[0], originalLayer.eps, originalLayer.weight.device)
         qnorm.weight = originalLayer.weight.clone().contiguous()
         
+        
         qnorm.output_scale = None
         if output_scale is not None:
             assert type(output_scale) is float, "Only support per-tensor static quant for output"
@@ -65,6 +66,7 @@ class QRMSNorm(torch.nn.Module):
             if residual is not None
             else (torch.float32 if residual_in_fp32 else None)
         )
+
         y, residual_out, per_token_scale = _qlayer_norm_fwd(
             x,
             self.weight,

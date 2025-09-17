@@ -51,7 +51,7 @@ class W4A16B16O16Linear(torch.nn.Module):
             group_scale = originalLayer.group_scale # [n_groups, out_dim]
             # Marlin requires float16 scaling factors
             group_scale = group_scale.to(torch.float16)
-        assert bits == 4, "Only support 4-bit quantization"
+        assert bits == 4 or 1, "Only support 4-bit quantization"
         if group_size not in [-1, 128]:
             raise ValueError('Only groupsize -1 and 128 are supported.')
         
@@ -134,8 +134,7 @@ class W4A16B16O16Linear(torch.nn.Module):
 
     def __repr__(self):
         return f"W4A16B16O16Linear(in_features={self.in_features}, out_features={self.out_features})"
-
-
+    
 class W4A8B16O16Linear(torch.nn.Module):
 
     def __init__(self, in_features, out_features, group_size=128, device=None, **kwargs):
@@ -182,35 +181,36 @@ class W4A8B16O16Linear(torch.nn.Module):
             group_scale = originalLayer.group_scale # [n_groups, out_dim]
             # Marlin requires float16 scaling factors
             group_scale = group_scale.to(torch.float16)
-        assert bits == 4, "Only support 4-bit quantization"
+        assert bits == 1 or 4, "Only support 4-bit quantization"
         if group_size not in [-1, 128]:
             raise ValueError('Only groupsize -1 and 128 are supported.')
 
-        device = originalLayer.weight.device
-        qlinear = cls(originalLayer.in_features, originalLayer.out_features, group_size=128, device=device)
+        device = originalLayer.weight.device                                                                            #가중치 로드
+        qlinear = cls(originalLayer.in_features, originalLayer.out_features, group_size=128, device=device)             #버퍼할당
         qlinear.pad_out = 0
         # W is the fake quantized weight from GPTQ
         W = originalLayer.weight # [Dout, Din]
+        print(f"BeforeQuantizing layer ",W.norm())
         qlinear.size_n, qlinear.size_k = W.shape
         if W.shape[0] % 64 != 0:
             qlinear.pad_out = 64 - W.shape[0] % 64
 
         # Get per-channel scale and zero: 4-bit -> 8-bit
-        channel_scale = torch.max(torch.abs(W), 1, keepdim=True)[0] # [Dout, Din]
-        channel_scale /= 127.0
+        channel_scale = torch.max(torch.abs(W), 1, keepdim=True)[0] # [Dout, Din]                                       #8bit scale 계산 (GPTQ OX 전부 수행)
+        channel_scale /= 127.0                                                                                          #119, -119 써볼까?
         channel_scale = channel_scale.reshape(1, -1).to(dtype=torch.float) # QQQ requires [1, out_dim]
 
         # W16 per-channel per-group quantization to W4
-        W_t = W.cpu().to(torch.float16).t().contiguous() # [Dout, Din] -> [Din, Dout], move to CPU to save memory
-        group_scale = group_scale.cpu() if group_scale is not None else None
-        channel_scale = channel_scale.cpu()
+        W_t = W.cpu().to(torch.float16).t().contiguous() # [Dout, Din] -> [Din, Dout], move to CPU to save memory       #전치
+        group_scale = group_scale.cpu() if group_scale is not None else None                                            #group scale을 옮기고 , 없으면 0
+        channel_scale = channel_scale.cpu()                                                                             #위으 채널 스케일
         w_ref, q_w, s_group, s_channel = w4a8_quantize(
-            W_t, bits, group_size, group_scale, channel_scale, pad_out=qlinear.pad_out)
+            W_t, bits, group_size, group_scale, channel_scale, pad_out=qlinear.pad_out)                                 #디버깅용 Wref, q_W 는 4bit 가중치 8개씩 묶여서 INT32로 패킹된 tensor
 
-        qlinear.size_k, qlinear.size_n = w_ref.shape
-        qlinear.weight = q_w.to(device)
-        qlinear.input_scale = input_scale.to(device)
-        qlinear.s_group = s_group.to(device)
+        qlinear.size_k, qlinear.size_n = w_ref.shape                                                                    #디버깅용
+        qlinear.weight = q_w.to(device)                                                                                 #4bit 가중치
+        qlinear.input_scale = input_scale.to(device)                                
+        qlinear.s_group = s_group.to(device)                                
         qlinear.s_channel = s_channel.to(device)
         return qlinear
 
@@ -226,10 +226,14 @@ class W4A8B16O16Linear(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, x):
+
         x_shape = x.shape
+        #print(x_shape,"X_shape")
         # this contiguous is necessary for batch size > 1 for lm_head
         # https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py#L281
         x = x.view(-1, x_shape[-1]).contiguous()
+        #print(x, "XOriginXOriginXOriginXOriginXOriginXOriginXOriginXOriginXOriginXOrigin")
+        
         y = quant_linear_cuda.w4a8o16_gemm(
             x,
             self.weight,
@@ -242,10 +246,14 @@ class W4A8B16O16Linear(torch.nn.Module):
             self.size_k,    # k: in_features
             False           # transpose output
         )
+        #print(self.input_scale,"scale_R")
         if self.pad_out != 0:
             y = y[:, 0:-self.pad_out]
         y = y.view(*x_shape[:-1], -1) # [B*L, D] -> [B, L, D]
+        
+        #print(y,"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy")
         return y
+        
 
     @torch.no_grad()
     def to_seqlen_last(self, x):
@@ -263,6 +271,7 @@ class W4A8B16O16Linear(torch.nn.Module):
             self.size_k,    # k: in_features
             True            # transpose output
         )
+        #print(y.shape,y.type,"Yshape,Ytype")
         if self.pad_out != 0:
             y = y[0:-self.pad_out, :]
         y = y.view(-1, *x_shape[:-1]) # [D, B*L] -> [D, B, L]
@@ -324,7 +333,7 @@ class W4A8B8O8Linear(torch.nn.Module):
             group_scale = originalLayer.group_scale # [n_groups, out_dim]
             # Marlin requires float16 scaling factors
             group_scale = group_scale.to(torch.float16)
-        assert bits == 4, "Only support 4-bit quantization"
+        assert bits == 4 or 1, "Only support 4-bit quantization"
         if group_size not in [-1, 128]:
             raise ValueError('Only groupsize -1 and 128 are supported.')
 
@@ -371,6 +380,7 @@ class W4A8B8O8Linear(torch.nn.Module):
     def forward(self, x):
         x_shape = x.shape
         x = x.view(-1, x_shape[-1])
+        #print(x, "XOriginXOriginXOriginXOriginXOriginXOriginXOriginXOriginXOriginXOrigin")
         y = quant_linear_cuda.w4a8o8_gemm(
             x,
             self.weight,
@@ -383,6 +393,7 @@ class W4A8B8O8Linear(torch.nn.Module):
             self.size_k,    # k: in_features
             False           # transpose output
         )
+        #print(y.shape,y.type,"Yshape,Ytype")
         if self.pad_out != 0:
             y = y[:, 0:-self.pad_out]
         y = y.view(*x_shape[:-1], -1)
@@ -428,7 +439,7 @@ class W4A8B8O8LinearParallel(torch.nn.Module):
         
         self.pad_out = 0
         self.size_n, self.size_k = out_features, in_features
-        if self.size_n % 64 != 0:
+        if self.size_n % 64 != 0:                             #N이 64의 배수여얗미  
             self.pad_out = 64 - self.size_n % 64
         self.size_n = self.size_n + self.pad_out
 
@@ -467,7 +478,7 @@ class W4A8B8O8LinearParallel(torch.nn.Module):
             group_scale = originalLayer.group_scale # [n_groups, out_dim]
             # Marlin requires float16 scaling factors
             group_scale = group_scale.to(torch.float16)
-        assert bits == 4, "Only support 4-bit quantization"
+        assert bits == 4 or 1, "Only support 4-bit quantization"
         if group_size not in [-1, 128]:
             raise ValueError('Only groupsize -1 and 128 are supported.')
 
@@ -515,6 +526,7 @@ class W4A8B8O8LinearParallel(torch.nn.Module):
     def forward(self, x):
         x_shape = x.shape
         x = x.view(-1, x_shape[-1])
+        #print("U_shape,",x.shape)
         y = quant_linear_cuda.w4a8o8_gemm(
             x,
             self.weight,
@@ -530,11 +542,125 @@ class W4A8B8O8LinearParallel(torch.nn.Module):
         if self.pad_out != 0:
             y = y[:, 0:-self.pad_out]
         y = y.view(*x_shape[:-1], -1)
+        #print("xbcdtz,",y.shape)
         return y
     
     def __repr__(self):
         return f"W4A8B8O8LinearParallel(in_features={self.in_features}, out_features={self.out_features})"
     
+
+class W4A8B16O16LinearParallel(torch.nn.Module):
+
+    def __init__(self, in_features, out_features, group_size=128, device=None, **kwargs):
+        factory_kwargs = {"device": device}
+        super().__init__()
+        self.bias = None
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        self.pad_out = 0
+        self.size_n, self.size_k = out_features, in_features
+        if self.size_n % 64 != 0:                             #N이 64의 배수여얗미  
+            self.pad_out = 64 - self.size_n % 64
+        self.size_n = self.size_n + self.pad_out
+
+        self.max_par = 16
+        # 128 is currently the minimum `tile_n`, hence it gives the maximum workspace size; 16 is the default `max_par`
+        max_workspace_size = ((self.size_n // MARLIN_QQQ_MIN_THREAD_N) * MARLIN_QQQ_MAX_PARALLEL)
+        self.register_buffer('workspace', torch.zeros(
+            max_workspace_size, dtype=torch.int, **factory_kwargs))
+        # Buffers won’t be returned in model.parameters(), so that the optimizer won’t have a change to update them.
+        self.register_buffer('weight', torch.empty(
+            (self.size_k//16, self.size_n*16 // 8),
+            dtype=torch.int32, **factory_kwargs))
+        self.register_buffer('input_scale', torch.empty(
+            (), dtype=torch.float32, **factory_kwargs)) # no-shape
+        self.register_buffer('s_channel', torch.empty(
+            (1, self.size_n), dtype=torch.float32, **factory_kwargs))
+        self.register_buffer('s_group', torch.empty(
+            (self.size_k//group_size, self.size_n),
+            dtype=torch.float16, **factory_kwargs))
+
+
+    @classmethod
+    def from_fp16(cls, originalLayer: nn.Linear, input_scale: torch.Tensor,):
+
+        assert input_scale.numel() == 1, "Only support per-tensor input scale"
+        assert originalLayer.bias is None, "Not support bias yet"
+        # The linear kernel only supports symmetric quantization, so we only have scales
+        bits = 4
+        group_size = 128 if originalLayer.in_features > 128 else -1
+        group_scale = None
+        if hasattr(originalLayer, "apply_gptq") and originalLayer.apply_gptq == True:
+            bits = originalLayer.bits
+            group_size = originalLayer.group_size
+            group_scale = originalLayer.group_scale # [n_groups, out_dim]
+            # Marlin requires float16 scaling factors
+            group_scale = group_scale.to(torch.float16)
+        assert bits == 4 or 1, "Only support 4-bit quantization"
+        if group_size not in [-1, 128]:
+            raise ValueError('Only groupsize -1 and 128 are supported.')
+
+        device = originalLayer.weight.device
+        qlinear = cls(originalLayer.in_features, originalLayer.out_features, group_size=128, device=device)
+        # W is the fake quantized weight from GPTQ
+        W = originalLayer.weight # [Dout, Din]
+
+        # Get per-channel scale and zero: 4-bit -> 8-bit
+        channel_scale = torch.max(torch.abs(W), 1, keepdim=True)[0] # [Dout, Din]
+        channel_scale /= 127.0
+        channel_scale = channel_scale.reshape(1, -1).to(dtype=torch.float) # QQQ requires [1, out_dim]
+        # Get per-channel scale and zero: 4-bit -> 8-bit
+
+        # get the output scales for each output channel
+        # W16 per-channel per-group quantization to W4
+        W_t = W.cpu().to(torch.float16).t().contiguous() # [Dout, Din] -> [Din, Dout], move to CPU to save memory
+        group_scale = group_scale.cpu() if group_scale is not None else None
+        channel_scale = channel_scale.cpu()
+        w_ref, q_w, s_group, s_channel = w4a8_quantize(
+            W_t, bits, group_size, group_scale, channel_scale, pad_out=qlinear.pad_out)
+
+        qlinear.weight = q_w.to(device)
+        qlinear.input_scale = input_scale.to(device)
+        qlinear.s_group = s_group.to(device)
+        qlinear.s_channel = s_channel.to(device)
+        return qlinear
+
+    def to(self, *args, **kwargs):
+        super(W4A8B16O16LinearParallel, self).to(*args, **kwargs)
+        self.weight = self.weight.to(*args, **kwargs)
+        self.input_scale = self.input_scale.to(*args, **kwargs)
+        self.s_group = self.s_group.to(*args, **kwargs)
+        self.s_channel = self.s_channel.to(*args, **kwargs)
+        if self.bias is not None:
+            self.bias = self.bias.to(*args, **kwargs)
+        return self
+
+    @torch.no_grad()
+    def forward(self, x):
+        x_shape = x.shape
+        x = x.view(-1, x_shape[-1])
+        #print("U_shape,",x.shape)
+        y = quant_linear_cuda.w4a8o16_gemm(
+            x,
+            self.weight,
+            self.input_scale,
+            self.s_channel,
+            self.s_group,
+            self.workspace,
+            x.shape[0],     # m: batch size * seq_len
+            self.size_n,    # n: out_features
+            self.size_k,    # k: in_features
+            False           # transpose output
+        )
+        if self.pad_out != 0:
+            y = y[:, 0:-self.pad_out]
+        y = y.view(*x_shape[:-1], -1)
+        #print("xbcdtz,",y.shape)
+        return y
+    
+    def __repr__(self):
+        return f"W4A8B16O16LinearParallel(in_features={self.in_features}, out_features={self.out_features})"
 
 class W8A8B8O8Linear(torch.nn.Module):
 
@@ -756,7 +882,7 @@ class W8A8B16O16Linear(torch.nn.Module):
         # Buffers won’t be returned in model.parameters(), so that the optimizer won’t have a change to update them.
         self.register_buffer('weight', torch.empty_strided(
             (in_features, self.out_features+self.pad_out), # contiguous? We have [Din, Dout] (Not contiguous)
-            stride=(1, in_features), dtype=torch.int8, device=torch.device('cuda')))
+            stride=(1, in_features), dtype=torch.int8, device=torch.device('cuda'))) ##양자화된 weight INT8 로 저장, transpose해서 저장되어있음(CUDA가 읽기 편하게)
         self.register_buffer('a', torch.empty(
             [1, 1], dtype=torch.float32, device=torch.device('cuda')))
         self.register_buffer('b', torch.empty(
@@ -766,7 +892,10 @@ class W8A8B16O16Linear(torch.nn.Module):
         self.alpha = 0.0
         self._register_state_dict_hook(self.store_hook)
         self._register_load_state_dict_pre_hook(self.load_hook)
-
+    @property
+    def input_scale(self):
+        # W4A8 과 같은 이름으로 접근할 수 있게 해줌
+        return self.a
     @classmethod
     def from_fp16(cls, originalLayer: nn.Linear, input_scale: float = 1.0):
         qlinear = cls(originalLayer.in_features, originalLayer.out_features)
@@ -879,3 +1008,172 @@ class HadLinear(torch.nn.Linear):
     def __repr__(self):
         return f"HadLinear(in_features={self.in_features}, out_features={self.out_features}, input_transform={self.input_transform}, output_transform={self.output_transform})"
     
+
+
+class W8A16B16O16Linear(torch.nn.Module):
+
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bias = None
+
+        self.pad_out = 0
+        if self.out_features % 16 != 0:
+            self.pad_out = 16 - (self.out_features % 16) 
+        # int8 [Din, Dout] 텐서를 column-major stride 로 등록
+        self.register_buffer(
+            "weight",
+            torch.empty_strided(
+                (in_features, out_features + self.pad_out),
+                stride=(1, in_features),
+                dtype=torch.int8,
+                device="cuda",
+            ),
+        )
+        self.register_buffer("a", torch.tensor([[1.0]], dtype=torch.float32, device="cuda"))  # A16 ⇒ 1.0
+        self.register_buffer("b", torch.empty((1, 1), dtype=torch.float32, device="cuda"))     # weight scale
+        self.alpha = 0.0  # gemv fast-path용 float
+        self._register_state_dict_hook(self.store_hook)
+        self._register_load_state_dict_pre_hook(self.load_hook)
+
+    @classmethod
+    def from_fp16(cls, originalLayer: nn.Linear, input_scale: float = 1.0):
+        qlinear = cls(originalLayer.in_features, originalLayer.out_features)
+
+        int8_weight, weight_scale = quantize_tensor_per_tensor_absmax(
+            originalLayer.weight, n_bits=8, clip_ratio=1.0
+        )
+        if qlinear.pad_out:
+            int8_weight = F.pad(int8_weight, (0, 0, 0, qlinear.pad_out),"constant", 0).contiguous()
+
+        qlinear.weight = int8_weight.to(torch.int8).t()  # [Din, Dout]
+
+        # activation-scale만 저장
+        qlinear.a = torch.tensor([[input_scale]], dtype=torch.float32, device="cuda", requires_grad=False)
+        qlinear.b = torch.tensor([[weight_scale]], dtype=torch.float32, device="cuda", requires_grad=False)
+
+        # ------------------------------------------
+        # 변경② : alpha = w_scale * input_scale
+        # ------------------------------------------
+        qlinear.alpha = (weight_scale * input_scale).item()
+        return qlinear
+
+    def store_hook(self, module, state_dict, prefix, _):
+        state_dict[prefix + "alpha"] = self.alpha
+        return state_dict
+
+    def load_hook(self, state_dict, prefix, *_):
+        self.alpha = state_dict[prefix + "alpha"]
+        del state_dict[prefix + "alpha"]
+
+    def to(self, *args, **kwargs):
+        super(W8A16B16O16Linear).to(*args, **kwargs)
+        self.weight = self.weight.to(*args, **kwargs)
+        self.a = self.a.to(*args, **kwargs)
+        self.b = self.b.to(*args, **kwargs)
+        if self.bias is not None:
+            self.bias = self.bias.to(*args, **kwargs)
+        return self
+
+    @torch.no_grad()
+    def forward(self, x):
+        x_shape = x.shape
+        x = x.view(-1, x_shape[-1]).contiguous()
+        y = torch.empty((x.shape[0], self.out_features + self.pad_out), dtype=x.dtype, device=x.device)
+        if x.shape[0] == 1:
+            quant_linear_cuda.cutlass_scaled_mv_dq(y, self.weight.t(), x, self.alpha, 0.0)
+        else:
+            quant_linear_cuda.cutlass_scaled_mm_dq(y, x, self.weight, self.a, self.b)
+        if self.pad_out != 0:
+            y = y[:, 0:-self.pad_out]
+        return y.view(*x_shape[:-1], -1)
+
+    def __repr__(self):
+        return f"W8A16B16O16Linear(in_features={self.in_features}, out_features={self.out_features})"
+    
+    
+
+class W8A8B16O16LinearParallel(torch.nn.Module):
+
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.bias = None
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        self.pad_out = 0
+        if self.out_features % 16 != 0:
+            self.pad_out = 16 - (self.out_features % 16) 
+
+        # Buffers won’t be returned in model.parameters(), so that the optimizer won’t have a change to update them.
+        self.register_buffer('weight', torch.empty_strided(
+            (in_features, self.out_features+self.pad_out), # contiguous? We have [Din, Dout] (Not contiguous)
+            stride=(1, in_features), dtype=torch.int8, device=torch.device('cuda'))) ##양자화된 weight INT8 로 저장, transpose해서 저장되어있음(CUDA가 읽기 편하게)
+        self.register_buffer('a', torch.empty(
+            [1, 1], dtype=torch.float32, device=torch.device('cuda')))
+        self.register_buffer('b', torch.empty(
+            [1, 1],
+            dtype=torch.float32, device=torch.device('cuda')))
+        # for gemv
+        self.alpha = 0.0
+        self._register_state_dict_hook(self.store_hook)
+        self._register_load_state_dict_pre_hook(self.load_hook)
+    @property
+    def input_scale(self):
+        # W4A8 과 같은 이름으로 접근할 수 있게 해줌
+        return self.a
+    @classmethod
+    def from_fp16(cls, originalLayer: nn.Linear, input_scale: float = 1.0):
+        qlinear = cls(originalLayer.in_features, originalLayer.out_features)
+        int8_weight, weight_scale = quantize_tensor_per_tensor_absmax(
+            originalLayer.weight, n_bits = 8, clip_ratio = 1.0)
+        if qlinear.pad_out != 0:
+            int8_weight = torch.nn.functional.pad(int8_weight, (0, 0, 0, qlinear.pad_out), "constant", 0).contiguous()
+        int8_weight = int8_weight.to(torch.int8).t() # shape [Dout, Din], stride [Din, 1] -> [Din, Dout], stride [Din, 1]
+        qlinear.weight = int8_weight
+        qlinear.a = torch.tensor([[input_scale]], requires_grad=False,
+            dtype=torch.float32, device=int8_weight.device)
+        qlinear.b = torch.tensor([[weight_scale]], requires_grad=False,
+            dtype=torch.float32, device=int8_weight.device)
+        # for gemv, alpha is a float, not a tensor
+        qlinear.alpha = (weight_scale * input_scale).item()
+        return qlinear
+
+    def store_hook(self, module, state_dict, prefix, local_metadata):
+        state_dict[prefix + 'alpha'] = self.alpha
+        return state_dict
+        
+    def load_hook(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        self.alpha = state_dict[prefix + 'alpha']
+        del state_dict[prefix + 'alpha']
+
+    def to(self, *args, **kwargs):
+        super(W8A8B16O16LinearParallel, self).to(*args, **kwargs)
+        self.weight = self.weight.to(*args, **kwargs)
+        self.a = self.a.to(*args, **kwargs)
+        self.b = self.b.to(*args, **kwargs)
+        # alpha is a float, not a tensor
+        if self.bias is not None:
+            self.bias = self.bias.to(*args, **kwargs)
+        return self
+
+    @torch.no_grad()
+    def forward(self, x):
+        x_shape = x.shape
+        # this contiguous is necessary for batch size > 1 for lm_head
+        # https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py#L281
+        x = x.view(-1, x_shape[-1]).contiguous() # must squeeze the tensor first
+        y = torch.empty((x.shape[0], self.out_features + self.pad_out), dtype=torch.float16, device=x.device)
+        if x.shape[0] == 1:
+            quant_linear_cuda.cutlass_scaled_mv_dq(y, self.weight.t(), x, self.alpha, 0.0)
+        else:
+            # self.weight [Dout, Din], stride [1, Dout]
+            quant_linear_cuda.cutlass_scaled_mm_dq(y, x, self.weight, self.a, self.b)
+        if self.pad_out != 0:
+            y = y[:, 0:-self.pad_out]
+        y = y.view(*x_shape[:-1], -1)
+        return y
+
+    def __repr__(self):
+        return f"W8A8B16O16LinearParallel(in_features={self.in_features}, out_features={self.out_features})"

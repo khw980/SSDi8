@@ -46,7 +46,7 @@ def _qlayer_norm_fwd_1pass_kernel(
     cols = tl.arange(0, BLOCK_N)
     x = tl.load(X + cols, mask=cols < N, other=0.).to(tl.float32)
     if HAS_Z and not NORM_BEFORE_GATE:
-        z = tl.load(QZ + cols, mask=cols < N).to(tl.float32) * Z_scale
+        z = tl.load(QZ + cols, mask=cols < N).to(tl.float32) #* Z_scale
         x *= z * tl.sigmoid(z)
     if not IS_RMS_NORM:
         mean = tl.sum(x, axis=0) / N
@@ -64,7 +64,7 @@ def _qlayer_norm_fwd_1pass_kernel(
     x_hat = (x - mean) * rstd if not IS_RMS_NORM else x * rstd
     y = x_hat * w + b if HAS_BIAS else x_hat * w
     if HAS_Z and NORM_BEFORE_GATE:
-        z = tl.load(QZ + cols, mask=mask).to(tl.float32) * Z_scale
+        z = tl.load(QZ + cols, mask=mask).to(tl.float32) #* Z_scale
         y *= z * tl.sigmoid(z)
     if USE_FLOAT16_OUTPUT:
         # Write output
@@ -130,5 +130,3 @@ def _qlayer_normgated_fwd(
                                            IS_STATIC_SCALE=static_out_scale is not None,
                                            num_warps=num_warps)
     return out, per_token_scale
-
-

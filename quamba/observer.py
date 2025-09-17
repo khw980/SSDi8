@@ -403,3 +403,88 @@ class CachedStatesCrossHeadMinmaxObserver:
         #     ]
         #     hg: head group, ch_g: channel group
         return (ssd_group_scales, ssd_group_base)
+
+
+
+
+class ChunkCollector:
+    def __init__(self, div=127.0, dtype=torch.float32, device="cuda"):
+        self.running = None
+        self.div = float(div)
+        self.dtype = dtype
+        self.device = torch.device(device)
+
+    @torch.no_grad()
+    def update_amax(self, amax_tensor: torch.Tensor):
+        # 들어오는 텐서는 fp16이어도 되지만 계산은 fp32로
+        t = amax_tensor.detach().to(self.device, dtype=self.dtype)
+        if self.running is None:
+            self.running = t
+        else:
+            # shape 동일해야 함 (예: (C,H,P) 또는 (C,G,N))
+            self.running = torch.max(self.running, t)
+
+    @torch.no_grad()
+    def get_scale(self) -> torch.Tensor:
+        # absmax / 127
+        assert self.running is not None, "no stats collected"
+        return (self.running / self.div).clamp_min(1e-8).to(torch.float32)
+
+    def reset(self):
+        self.running = None
+
+
+
+
+class _ChannelMeanCollector:
+    def __init__(self, keep_dtype=torch.float32):
+        self.mean_val = None   # (D,)
+        self.count = 0         # 총 유효 토큰 수
+        self.keep_dtype = keep_dtype
+
+    @torch.no_grad()
+    def update(self, y: torch.Tensor, mask: torch.Tensor | None = None):
+        # y: (B, L, D) or (N, D)
+        # 합계는 반드시 fp32로!
+        if y.dim() == 3:  # (B, L, D)
+            # print("y shape:", y.shape)
+            if mask is not None:
+                # mask: (B, L) in {0,1}
+                m = mask.to(torch.float32).unsqueeze(-1)             # (B, L, 1)
+                s = (y.detach().to(torch.float32) * m).sum((0, 1))   # (D,)
+                n = int(m.sum().item())
+            else:
+                s = y.detach().sum(dim=(0, 1), dtype=torch.float32)  # (D,)
+                n = y.shape[0] * y.shape[1]
+                # print("n:", n)
+        elif y.dim() == 2:  # (N, D)
+            # print("y shape:", y.shape)
+            s = y.detach().sum(dim=0, dtype=torch.float32)           # (D,)
+            n = y.shape[0]
+            # print("n:", n)
+        else:
+            raise ValueError(f"unexpected shape {y.shape}")
+
+        if n == 0:
+            return
+
+        mean_batch = torch.nan_to_num(s / n, nan=0.0, posinf=0.0, neginf=0.0) \
+                         .to(self.keep_dtype)
+
+        if self.mean_val is None:
+            self.mean_val = mean_batch
+            self.count = n
+        else:
+            total = self.count + n
+            w = n / total
+            # CMA: mu <- mu + w * (x - mu)
+            self.mean_val = self.mean_val + (mean_batch - self.mean_val) * w
+            self.count = total
+
+    @property
+    def mean(self) -> torch.Tensor | None:
+        return self.mean_val
+
+    def reset(self):
+        self.mean_val = None
+        self.count = 0

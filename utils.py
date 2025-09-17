@@ -108,7 +108,68 @@ def get_quantize_options(parser):
         '--hybrid_blocks_config', type=str, default=None,
         help='Path to the the configuration for hybrid blocks'
     )
+    #############################################################Smooth###############################################################
+    parser.add_argument(
+        '--apply_smoothing', action='store_true', default=False,
+        help='Whether to apply the smoothing inp/out for quantization (default: False)'  
+    )
+    parser.add_argument(
+        '--apply_hadamard', action='store_true', default=False,
+        help='Whether to apply the Hadamard transform for quantization (default: False)'
+    )
+    parser.add_argument(
+        '--smoothing_alpha', type=float, default=0.7,
+        help='The alpha value for smoothing (default: 0.7)'
+    )
+    parser.add_argument(
+        '--smoothing_out_alpha', type=float, default=0.8,
+        help='The alpha value for smoothing (default: 0.7)'
+    )
+    parser.add_argument(
+        '--apply_out_smoothing', action='store_true', default=False
+    )
+    parser.add_argument(
+        '--apply_inp_smoothing', action='store_true', default=False
+    )
+    parser.add_argument(
+        '--smoothing_inp_alpha', type=float, default=0.8,
+        help='The alpha value for smoothing (default: 0.7)'
+    )
     
+    ##COMP##
+    parser.add_argument(
+        '--compensation', action='store_true', default=False,
+    )
+    # parser.add_argument(
+    #     '--comp_in_decay', type=float, default=0.1
+    # )
+    parser.add_argument(
+        '--comp_out_decay', type=float, default=0.1
+    )
+    parser.add_argument(
+        '--comp_ssd_decay', type=float, default=0.1
+    )
+    parser.add_argument(
+        '--comp_sam_num', type=int, default=512
+    )
+    parser.add_argument(
+        '--comp_layers',
+        type=int,          # 요소 타입
+        nargs='+',         # 공백으로 구분된 여러 개 받기
+        default=None,
+        help="보상 적용할 레이어 인덱스 (예: --comp_layer 0 1 2 3)"
+    )
+    ##COMP##
+    
+    #############################################################proj_method########################################################
+    parser.add_argument('--lowrank', action='store_true',
+                        help='activate low-rank path (default rank=32)')
+    parser.add_argument('--lr_rank', type=int, default=32,
+                        help='rank K for the low-rank path')
+    parser.add_argument('--mixed_pre', action='store_true',)
+    parser.add_argument('--squeeze', action='store_true',)
+
+    #################################################################################################################################
 def parse_options():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -160,6 +221,14 @@ def parse_options():
         '--log_dir', type=str,
         help='path to the json log file storing the result of lm_evan and quantization settingarg'
     )
+    parser.add_argument(
+        '--ppl_seq_len', type=int, default=2048,
+        help='Fixed block length for perplexity eval (default: 2048)'
+    )
+    parser.add_argument(
+        '--plot', action='store_true', default=False,
+    )
     get_quantize_options(parser)
     args = parser.parse_args()
     return args
+    

@@ -8,6 +8,11 @@ from .quant_utils import quantize_tensor_per_tensor_absmax
 import quant_causal_conv1d_cuda
 import quamba2_conv1d_cuda
 
+try:
+    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+except ImportError:
+    causal_conv1d_fn, causal_conv1d_update = None, None
+
 class QCausalConv1D(nn.Module):
 
     def __init__ (self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, device=None, **kwargs):
@@ -241,7 +246,7 @@ class Quamb2Conv1D(nn.Module):
         d_start = 0
         split_int8_weight = []
         split_weight_scales = []
-        for dim in [qconv.x_dim, qconv.d_state*qconv.n_groups, qconv.d_state*qconv.n_groups]:
+        for dim in [qconv.x_dim, qconv.d_state*qconv.n_groups, qconv.d_state*qconv.n_groups]: #x,B,C 차원
             d_end = d_start + dim
             w_split = weight[d_start:d_end].contiguous()
             w_split_i8, w_split_scale = quantize_tensor_per_tensor_absmax(
@@ -302,16 +307,28 @@ class Quamb2Conv1D(nn.Module):
 
     @torch.no_grad()
     def forward(self, xBC):
-        x, B, C = quamba2_conv1d_cuda.fwd(
-                xBC, self.x_scale, self.B_scale, self.C_scale,
-                self.x_dim, self.x_headdim, self.d_state, self.n_groups,
-                self.x_head_group_range, self.x_dim_group_range,
-                self.x_out_scales, self.B_out_scales, self.C_out_scales,
-                self.weight, self.wx_scale, self.wB_scale, self.wC_scale,
-                self.bias, self.bx_scale, self.bB_scale, self.bC_scale,
-                None, None, None, True
-            )
-        return x, B, C
+        w_fp = self.dequantize_weight(torch.float16)
+        b_fp = self.dequantize_bias(torch.float16)
+        # x, B, C = quamba2_conv1d_cuda.fwd(
+        #         xBC, self.x_scale, self.B_scale, self.C_scale,
+        #         self.x_dim, self.x_headdim, self.d_state, self.n_groups,
+        #         self.x_head_group_range, self.x_dim_group_range,
+        #         self.x_out_scales, self.B_out_scales, self.C_out_scales,
+        #         self.weight, self.wx_scale, self.wB_scale, self.wC_scale,
+        #         self.bias, self.bx_scale, self.bB_scale, self.bC_scale,
+        #         None, None, None, True
+        #     )
+        xBC = causal_conv1d_fn(
+                    xBC, #NOTE(brian1009): (B, L, D) -> (B, D, L) for efficient conv1d
+                    w_fp,
+                    bias=b_fp,
+                    activation="silu",
+                    seq_idx=None,
+                ).transpose(1, 2)
+        #print("convx,",x.shape)
+        #print("convB,",B.shape)
+        #print("convC,",C.shape)
+        return xBC #x, B, C
 
     @torch.no_grad()
     def update(self, xBC, conv_state):
@@ -336,6 +353,71 @@ class Quamb2Conv1D(nn.Module):
     #     for name, buf in self.named_buffers():
     #         setattr(self, name, buf.to(*args, **kwargs))
     #     return self
+    
+    def _split_sizes(self):
+        # x | B | C 채널 분할 크기
+        d_x = self.x_dim
+        d_B = self.d_state * self.n_groups
+        d_C = self.d_state * self.n_groups
+        return d_x, d_B, d_C
+    
+    @torch.no_grad()
+    def dequantize_weight(self, dtype=torch.float16, accumulate_fp32=True):
+        # weight: (D, W) where D = dx + dB + dC, W = kernel_size
+        d_x, d_B, d_C = self._split_sizes()
+        w = self.weight  # int8 (D, W)
+
+        # 1) 스케일 벡터 구성 (D,)
+        if accumulate_fp32:
+            s = torch.empty(d_x + d_B + d_C, device=w.device, dtype=torch.float32)
+        else:
+            s = torch.empty(d_x + d_B + d_C, device=w.device, dtype=dtype)
+
+        s[:d_x] = float(self.wx_scale)  
+        s[d_x:d_x+d_B] = float(self.wB_scale)
+        s[d_x+d_B:] = float(self.wC_scale)
+
+        # 2) 디퀀트: int8 -> fp32 -> *scale -> fp16 (정확도/속도 균형)
+        if accumulate_fp32:
+            out = (w.to(torch.float32) * s.view(-1, 1)).to(dtype)
+        else:
+            # 더 빠르지만 누적 정밀도는 약간 떨어질 수 있음
+            out = (w.to(dtype) * s.view(-1, 1)).to(dtype)
+
+        return out.contiguous()
+
+    @torch.no_grad()
+    def dequantize_bias(self, dtype=torch.float16, accumulate_fp32=True):
+        if self.bias is None:
+            return None
+        d_x, d_B, d_C = self._split_sizes()
+        b = self.bias  # int8 (D,)
+
+        if accumulate_fp32:
+            s = torch.tensor(
+                [float(self.bx_scale)] * d_x +
+                [float(self.bB_scale)] * d_B +
+                [float(self.bC_scale)] * d_C,
+                device=b.device, dtype=torch.float32
+            )
+            out = (b.to(torch.float32) * s).to(dtype)
+        else:
+            s = torch.tensor(
+                [float(self.bx_scale)] * d_x +
+                [float(self.bB_scale)] * d_B +
+                [float(self.bC_scale)] * d_C,
+                device=b.device, dtype=dtype
+            )
+            out = (b.to(dtype) * s).to(dtype)
+
+        return out.contiguous()
+
 
     def __repr__(self):
         return f"Quamb2Conv1D({self.out_channels}, {self.in_channels}, kernel_size={self.kernel_size}, stride={self.stride})"
+    
+
+
+
+
+    

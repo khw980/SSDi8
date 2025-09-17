@@ -64,7 +64,8 @@ def evaluate_ppl(
     model_name,
     batch_size=1,
     device="cuda",
-    dataset = 'wikitext2'
+    dataset = 'wikitext2',
+    seq_len=2048
 ):
     """
     model: model name
@@ -77,8 +78,9 @@ def evaluate_ppl(
     logger.info(f"Evaluating pereplexity on {dataset} dataset")
     testloader = get_eval_loaders(dataset, tokenizer)
    #torch.save(testloader, cache_testloader)
-    model.eval()            
-    ppl, _ = my_eval_ppl(model, testloader, bs=batch_size, device=device)
+    with _time_block("eval_latency", device=device):
+        model.eval()            
+    ppl, _ = my_eval_ppl(model, testloader, bs=batch_size, device=device, seq_len=seq_len)
     logger.info(f"pereplexity on {dataset}: {ppl.item()}")
     results[dataset] = ppl.item()
     return results

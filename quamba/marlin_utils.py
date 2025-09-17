@@ -97,6 +97,11 @@ def get_w4a8_weight_perm(num_bits: int, quant_type: str):
             interleave = np.array([4, 0, 5, 1, 6, 2, 7, 3])
         else:
             interleave = np.array([0, 2, 4, 6, 1, 3, 5, 7])
+    elif num_bits == 1:
+        if quant_type == "per-channel":
+            interleave = np.array([4, 0, 5, 1, 6, 2, 7, 3])
+        else:
+            interleave = np.array([0, 2, 4, 6, 1, 3, 5, 7])
     else:
         raise Exception("num_bits must be 4, got {}".format(num_bits))
 
@@ -235,11 +240,11 @@ def w4a8_quantize(
     # Quantize
     if s_group is None or s_channel is None:
         w_ref, q_w, s_group, s_channel = get_w4a8_quantize_weights(w, num_bits, group_size)
-    else: # s_group and s_channel are not None
+    else: # s_group and s_channel are not None                                                  ####반드시 s_group과 s_channel을 넘겨줄것(GPTQ할거면)
         # w is already (fake) quantized
-        w_ref = w.clone()
+        w_ref = w.clone()                                                                          #원본 W대기
         # represent w in integer
-        max_q_val = 2**num_bits - 1
+        max_q_val = 2**num_bits - 1     
         half_q_val = (max_q_val + 1) // 2
         w = w.reshape((-1, group_size, size_n))
         q_w = ((w / s_group.unsqueeze(1)) + half_q_val).round().int()

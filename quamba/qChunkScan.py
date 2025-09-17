@@ -46,7 +46,12 @@ class Quamba2ChunkScan(nn.Module):
             self.d_ssm if self.D_has_hdim else nheads,
             dtype=torch.int8, **factory_kwargs))
         self.register_buffer('D_scale', torch.empty([], dtype=torch.float32, **factory_kwargs)) # no-shape
-
+        self.register_buffer("x_chunk_state_scale_chp", None)
+        self.register_buffer("ori_x_chunk_state_scale_chp", None)
+        self.register_buffer("B_chunk_state_scale_cgn", None)
+        self.register_buffer("C_chunkscan_scale", None)
+        self.register_buffer("cb_chunkscan_scale", None)
+        self.register_buffer("state_chunkscan_scale", None)
         # Create space for scales
         quant_params = {'dt': quant_dt, 'z': quant_z}
         for name, quant_flag in quant_params.items():
@@ -95,7 +100,8 @@ class Quamba2ChunkScan(nn.Module):
     def from_fp16(cls, d_ssm, headdim, d_state, ngroups,
                  x_scales, x_head_group_range, x_dim_group_range,
                  A_log, chunk_size, ssm_state_scale, D=None, D_has_hdim=False, dt_bias=None, delta_softplus=True,
-                 dt_scale=None, B_scale=None, C_scale=None, z_scale=None, dt_limit=(0.0, float("inf"))):
+                 dt_scale=None, B_scale=None, C_scale=None, z_scale=None, dt_limit=(0.0, float("inf")),
+                 x_row_scale_chp=None,ori_x_row_scale_chp=None, B_row_scale_cgn=None,C_chunkscan_scale=None,cb_chunkscan_scale=None,state_chunkscan_scale=None,):
 
         nhead_groups = x_head_group_range.shape[1] if x_head_group_range is not None else 0
         ndim_groups = x_dim_group_range.shape[1] if x_dim_group_range is not None else 0
@@ -127,6 +133,31 @@ class Quamba2ChunkScan(nn.Module):
         else:
             qchunkscan.dt_bias = None  
 
+            
+        if x_row_scale_chp is not None:
+            qchunkscan.x_chunk_state_scale_chp = x_row_scale_chp.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
+        if ori_x_row_scale_chp is not None:
+            qchunkscan.ori_x_chunk_state_scale_chp = ori_x_row_scale_chp.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
+        if B_row_scale_cgn is not None:
+            qchunkscan.B_chunk_state_scale_cgn = B_row_scale_cgn.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
+        if cb_chunkscan_scale is not None:
+            qchunkscan.cb_chunkscan_scale = cb_chunkscan_scale.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
+        if C_chunkscan_scale is not None:
+            qchunkscan.C_chunkscan_scale = C_chunkscan_scale.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
+        if state_chunkscan_scale is not None:
+            qchunkscan.state_chunkscan_scale = state_chunkscan_scale.to(
+                qchunkscan.A_log.device, dtype=torch.float32
+            ).contiguous()
         # use scale.item() will cause Floating point exception (core dumped), since python use float64
         # to make sure we are using float32, we just pass in the scalar tensors with torch.float32 type
         scales = {'dt_scale': dt_scale, 'B_scale': B_scale, 'C_scale': C_scale, 'z_scale': z_scale}
@@ -155,7 +186,11 @@ class Quamba2ChunkScan(nn.Module):
             return scales.to(device)
 
     def set_chunk_scan_fn(self):
-
+        self.x_scales = torch.tensor(1.0, dtype=torch.float32, device=self.A_log.device)
+        self.B_scale  = torch.tensor(1.0, dtype=torch.float32, device=self.A_log.device)
+        self.C_scale  = torch.tensor(1.0, dtype=torch.float32, device=self.A_log.device)
+        self.dt_scale = torch.tensor(1.0, dtype=torch.float32, device=self.A_log.device)
+        self.z_scale  = torch.tensor(1.0, dtype=torch.float32, device=self.A_log.device) if self.z_scale is not None else None
         if self.x_head_group_range is not None and self.x_dim_group_range is not None:            
             # get chunk_scan_combined_fwd
             # scales must be on cuda before using partial for triton kernels
@@ -204,7 +239,14 @@ class Quamba2ChunkScan(nn.Module):
                     chunk_size=self.chunk_size, dt_bias=self.dt_bias,
                     initial_states=None, seq_idx=None,
                     cu_seqlens=None, dt_softplus=self.delta_softplus,
-                    dt_limit=self.dt_limit, mm_dtype=torch.float16)
+                    dt_limit=self.dt_limit, mm_dtype=torch.float16,
+                    x_row_scale_chp=self.x_chunk_state_scale_chp,
+                    ori_x_row_scale_chp=self.ori_x_chunk_state_scale_chp,
+                    B_row_scale_cgn=self.B_chunk_state_scale_cgn,
+                    cb_chunkscan_scale = self.cb_chunkscan_scale,
+                    C_chunkscan_scale = self.C_chunkscan_scale,
+                    state_chunkscan_scale = self.state_chunkscan_scale,
+                    )
             
             # get chunk_scan_combined_update
             # scales must be on cuda before using partial for triton kernels
@@ -218,16 +260,18 @@ class Quamba2ChunkScan(nn.Module):
                     q_D=repeat(self.D, "h -> h p", p=self.headdim) if self.D is not None else None,
                     D_scale=self.D_scale if self.D is not None else None,
                     dt_bias=repeat(self.dt_bias, "h -> h p", p=self.headdim) if self.dt_bias is not None else None,
-                    dt_softplus=self.delta_softplus)
+                    dt_softplus=self.delta_softplus,)
         else:
             raise ValueError("x_head_group_range and x_dim_group_range must be both None or both not None")
 
     @torch.no_grad()
-    def forward(self, x, dt, B, C, z=None, return_final_states=False):
+    def forward(self, x, dt, B, C, z=None, return_final_states=False, comp_calib=False):
         # output y is fp16
         y, final_states = self.chunk_scan_combined_fwd(
             q_x=x, q_dt=dt, q_B=B, q_C=C, q_z=z,
-            z_scale=self.z_scale.cuda() if z is not None else None)
+            z_scale=self.z_scale.cuda() if z is not None else None,
+            comp_calib=comp_calib
+        )
         return y if not return_final_states else (y, final_states)
 
     @torch.no_grad()
