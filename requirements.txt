@@ -3,7 +3,7 @@ torchvision==0.19.0
 torchaudio==2.4.0
 
 # Triton override
-triton==3.4.0  # force upgrade after torch pulls 3.0.0
+#triton==3.4.0  # force upgrade after torch pulls 3.0.0
 
 transformers==4.41.2
 peft==0.10.0
