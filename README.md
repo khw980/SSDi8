@@ -21,6 +21,7 @@
 git clone --recurse-submodules git@github.com:enyac-group/Quamba.git
 # or
 cd Quamba
+###Need SSH key
 git submodule update --init --recursive
 ```
 
