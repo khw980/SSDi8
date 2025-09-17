@@ -102,13 +102,6 @@ pip install -e 3rdparty/Megatron-LM
 pip install .
 ```
 
-## Model Zoo
-| Models    | W8A8     |  W4A8       |  W4A16  |  W4AX |
-| --------- | ---------|-------------|--------------|------|
-| [Mamba1](https://huggingface.co/collections/ut-enyac/quamba-67edf67881154f4a12e41cb3)    | ✅  |  ✅ | ✅ | - |
-| [Mamba2](https://huggingface.co/collections/ut-enyac/quamba2-67edf74a0880f7fba8438cc3)    | ✅  |  ✅ | ✅ | 8B |
-
-✅ : support all sizes, *e.g*, Mamba2 130m/370m/780m/1.3b/2.7b/8b
 
 ## Download Models
 ```bash
@@ -127,35 +120,6 @@ python generate.py ut-enyac/quamba2-2.7b-w4a8 --prompt "My cat wrote all this CU
 bash eval.sh ut-enyac/quamba2-2.7b-w4a8
 ```
 
-
-## Profile latency and memory
-
-- To profile model size, use `--size`:
-```bash
-python profile_mamba.py ut-enyac/quamba2-2.7b-w4a8 --prompt_len 512 --size --pretrained_dir pretrained_models
-```
-
-- To profile time-to-first-token (prefilling stage), use `--ttft`:
-```bash
-python profile_mamba.py ut-enyac/quamba2-2.7b-w4a8 --prompt_len 512 --ttft --pretrained_dir pretrained_models
-```
-
-- To profile time-per-output-token (generation stage), use `--tpot --cache_graph`:
-```bash
-python profile_mamba.py ut-enyac/quamba2-2.7b-w4a8 --tpot --cache_graph --pretrained_dir pretrained_models
-```
-
-- To profile time-to-last-token (prefilling + generation stage), use `--ttlt --cache_graph`:
-```bash
-python profile_mamba.py ut-enyac/quamba2-2.7b-w4a8 --prompt_len 512 --gen_len 512 --ttlt --cache_graph --pretrained_dir pretrained_models
-```
-
-## Chat (Mamba1 Only)
-
-```bash
-huggingface-cli download ut-enyac/quamba-chat-w4a8  --local-dir pretrained_models/ut-enyac/quamba-chat-w4a8 
-python chat.py ut-enyac/quamba-chat-w4a8 --cache_graph --pretrained_dir ./pretrained_models
-```
 
 ## Mamba2-8B
 
@@ -215,52 +179,5 @@ python main.py pretrained_models/mamba2-8b-converted \
 --log_dir logs
 ``` 
 
-# Run Mixed-precision Quamba2-8B-W4AX
-**[TL;DR]** We provide the W4AX 8B model on Hugging Face. To use it, run:
-```bash
-huggingface-cli download ut-enyac/quamba2-8b-converted-w4aX  --local-dir pretrained_models/ut-enyac/quamba2-8b-converted-w4aX
-python main.py ut-enyac/quamba2-8b-converted-w4aX \
---batch_size 16 \
---eval_zero_shot \
---task_list lambada_openai \
---pretrained_dir ./pretrained_models \
---log_dir logs
-```
 
-### Quantize and Evaluate Qamba2-8B-W4AX
-Follow the previous steps to convert the Mamba2-8B first, and then run
-```bash
-# use the `--pretrained_dir` flag to store the quantized model
-# it will store the mixed-precision model with the name 
-# ut-enyac/mamba2-8b-converted-w4aX-hybrid_blocks_config
-python main.py pretrained_models/mamba2-8b-converted \
---batch_size 16 \
---eval_zero_shot \
---task_list lambada_openai \
---quantize \
---group_heads \
---apply_gptq \
---quantize_embedding \
---quantize_lm_head \
---w_bits 4 \
---hybrid_blocks \
---hybrid_blocks_config configs/hybrid/mamba2-8b/hybrid_blocks_config.json \
---pretrained_dir ./pretrained_models \
---log_dir logs
-```
 
-## Citation
-```
-@inproceedings{chiang2025quamba2,
-  title = {Quamba2: A Robust and Scalable Post-training Quantization Framework for Selective State Space Models},
-  author = {Chiang, Hung-Yueh and Chang, Chi-Chih and Frumkin, Natalia and Wu, Kai-Chiang, Abdelfattah, Mohamed S.  and Marculescu, Diana},
-  booktitle = {Forty-Second International Conference on Machine Learning (ICML)},
-  year = {2025}
-}
-@inproceedings{chiang2025quamba,
-  title = {Quamba: A Post-Training Quantization Recipe for Selective State Space Models},
-  author = {Chiang*, Hung-Yueh and Chang*, Chi-Chih and Frumkin, Natalia and Wu, Kai-Chiang and Marculescu, Diana},
-  booktitle = {The Thirteenth International Conference on Learning Representations (ICLR)},
-  year = {2025},
-}
-````
