@@ -24,20 +24,6 @@ cd Quamba
 git submodule update --init --recursive
 ```
 
-- Run in docker (optional)
-
-To build the docker image with customized kernels, run the following commands:
-```bash
-cd docker
-./build_docker.sh
-./run.sh # launch the container
-```
-
-Or Pull the pre-built docker image by
-```bash
-docker image pull hychiang/quamba-cuda-12.1:latest
-```
-
 - Create Quamba conda environment
 ```bash
 cd Quamba
