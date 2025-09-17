@@ -31,7 +31,7 @@ conda create -n quamba python=3.10
 conda activate quamba
 pip install -r requirements.txt
 pip uninstall -y triton
-pip install --no-deps triton==3.4.0
+pip install triton==3.4.0
 ```
 
 ### Build 3rd-party Libraries
