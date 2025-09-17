@@ -27,7 +27,7 @@ git submodule update --init --recursive
 
 - Create Quamba conda environment
 ```bash
-cd Quamba
+cd SSDi8
 conda create -n quamba python=3.10
 conda activate quamba
 pip install -r requirements.txt
