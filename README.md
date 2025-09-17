@@ -1,26 +1,10 @@
-# Quamba
-
-[Hung-Yueh Chiang](https://hychiang.info/),
-[Chi-Chih Chang](https://ccchang.info/),
-[Natalia Frumkin](https://www.nfrumkin.com),
-[Kai-Chiang Wu](https://people.cs.nycu.edu.tw/~kcw/),
-[Mohamed S. Abdelfattah](https://www.mohsaied.com/),
-[Diana Marculescu](https://users.ece.utexas.edu/~dianam/)
-
-![Quamba CI](https://github.com/enyac-group/Quamba/actions/workflows/quamba-ci.yml/badge.svg)
-[![Quamba2 arXiv](https://img.shields.io/badge/Quamba2-arXiv-b31b1b.svg)](https://arxiv.org/pdf/2503.22879)
-[![Quamba2 Page](https://img.shields.io/badge/Quamba2-Website-orange)](https://hychiang.info/projects/quamba2/)
+# SSDi8
 
 
-- 🔧 Supports W4A8 / W4A16 / W4AX / W8A8 for Mamba1 and Mamba2
-- 🔻 4× memory reduction
-- 🚀 Achieves 13 tokens per second on Orin Nano 8G with Mamba2-8b
 
-![Quamba](misc/Quamba2.png)
+- 🔧 Supports W4A8 / W8A8 for Mamba2
 
 
-## Real-time Generation on a NVIDIA Orin Nano 8G
-![Quamba](misc/Quamba.gif)
 
 ## Setup
 
