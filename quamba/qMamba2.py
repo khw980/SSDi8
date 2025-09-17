@@ -1302,8 +1302,8 @@ class W4A8QMamba2(nn.Module):
             if True:#with _time_block("ssd_compensation", device=dev, mem=True, reset_peak=True):
                 if comp_calib:
                     y = self.ssd_out_act(y)  # 이거 실제 forward에선 불필요함 따로 처리할 방법 있으면 레이턴시 줄음
-                if self.compensation :
-                    y = y + self.ssd_comp
+                #if self.compensation :
+                    #y = y + self.ssd_comp
 
             if self.rmsnorm:
                     y = self.norm(y, z)
@@ -1855,8 +1855,8 @@ class W4A8QMamba2(nn.Module):
 #             with _time_block("ssd_compensation", device=dev):
 #                 if comp_calib :
 #                     y = self.ssd_out_act(y)
-#                 if self.compensation :
-#                     y += self.ssd_comp
+#                 #if self.compensation :
+#                     #y += self.ssd_comp
 #         with _time_block("rmsnorm", device=dev):
 #             if self.rmsnorm:
 #                 y = self.norm(y, z)
@@ -2358,8 +2358,8 @@ class W8A8QMamba2(nn.Module):
         if True:#with _time_block("ssd_compensation", device=dev):
                 if comp_calib :
                     y = self.ssd_out_act(y)
-                if self.compensation :
-                    y += self.ssd_comp
+                #if self.compensation :
+                    #y += self.ssd_comp
                     # print("SSD :", self.ssd_comp)
         if self.rmsnorm:
                 y = self.norm(y, z)
