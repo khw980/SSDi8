@@ -58,6 +58,7 @@ pip install 3rdparty/mamba
 - Install CUTLASS
 ```bash
 # cmake version >= 3.22.1
+install -c conda-forge cmake=3.22.1 ninja
 bash build_cutlass.sh
 ```
 
