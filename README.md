@@ -67,16 +67,16 @@ pip install -e 3rdparty/Megatron-LM
 # Not sure why Megatron-LM will force to install pytorch 2.6.0+cu124,
 # run `pip install -r requirements.txt` again if necessary
 ```
+
+### Build Quamba
+```bash
+pip install .
+```
 - Triton update
 ```bash
 pip uninstall -y triton
 pip install triton==3.4.0
 ```
-### Build Quamba
-```bash
-pip install .
-```
-
 
 ## Download Models
 ```bash
