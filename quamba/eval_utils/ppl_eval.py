@@ -78,8 +78,7 @@ def evaluate_ppl(
     logger.info(f"Evaluating pereplexity on {dataset} dataset")
     testloader = get_eval_loaders(dataset, tokenizer)
    #torch.save(testloader, cache_testloader)
-    with _time_block("eval_latency", device=device):
-        model.eval()            
+    model.eval()            
     ppl, _ = my_eval_ppl(model, testloader, bs=batch_size, device=device, seq_len=seq_len)
     logger.info(f"pereplexity on {dataset}: {ppl.item()}")
     results[dataset] = ppl.item()
