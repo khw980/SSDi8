@@ -20,7 +20,7 @@
 ```bash
 git clone --recurse-submodules git@github.com:enyac-group/Quamba.git
 # or
-cd Quamba
+cd SSDi8
 ###Need SSH key
 git submodule update --init --recursive
 ```
