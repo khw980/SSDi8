@@ -81,36 +81,8 @@ pip uninstall -y triton
 pip install triton==3.4.0
 ```
 
-## Download Models
-```bash
-# huggingface-cli download ut-enyac/quamba2-{size}-{precision}  --local-dir pretrained_models/ut-enyac/quamba2-{size}-{precision}
-huggingface-cli download ut-enyac/quamba2-2.7b-w4a8  --local-dir pretrained_models/ut-enyac/quamba2-2.7b-w4a8
-```
-
-## Generate
-
-```bash
-python generate.py ut-enyac/quamba2-2.7b-w4a8 --prompt "My cat wrote all this CUDA code for a new language model and" --topp 0.9 --temperature 0.7 --repetition_penalty 1.2 --quantize --cache_graph --pretrained_dir pretrained_models
-```
-
-## Evaluate
-```bash
-bash eval.sh ut-enyac/quamba2-2.7b-w4a8
-```
 
 
-## Mamba2-8B
-
-**[TL;DR]** We provide the 8B model in all precision formats on Hugging Face. To use it, run:
-```bash
-huggingface-cli download ut-enyac/quamba2-8b-converted-w4a8  --local-dir pretrained_models/ut-enyac/quamba2-8b-converted-w4a8
-python main.py ut-enyac/quamba2-8b-converted-w4a8 \
---batch_size 16 \
---eval_zero_shot \
---task_list lambada_openai \
---pretrained_dir ./pretrained_models \
---log_dir logs
-```
 
 ### Convert Nvidia Mamba2-8B to HuggingFace
 
