@@ -72,8 +72,9 @@ pip install -e 3rdparty/Megatron-LM
 ### Build Quamba
 ```bash
 pip install .
-
+pip uninstall -y causal-conv1d causal_conv1d || true
 ## Need causal-conv1d-1.5.0.post8
+pip install --no-build-isolation "causal-conv1d==1.5.0.post8"
 ```
 - Triton update
 ```bash
